@@ -1,0 +1,17 @@
+.:53 {
+  my_plugin param1 param2 {
+    core {
+      key-password aaa#bbb
+      brokers kafka-core.int.dev.wandera.co.uk:9092
+      tls true
+    }
+    jack {
+      key-password ccc
+      brokers kafka-core.int.dev.wandera.co.uk:9091
+      tls false
+    }
+    timeout 1s
+    numMaxRetries 4
+    IPv4 54.220.101.24
+  }
+}
