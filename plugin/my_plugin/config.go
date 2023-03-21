@@ -24,7 +24,7 @@ type Block struct {
 func parse(c *caddy.Controller) (config, error) {
 	var cacheParsed, blockParsed bool
 	cfg := config{}
-	//var err error
+	// var err error
 
 	if c.Next() {
 		args := c.RemainingArgs()

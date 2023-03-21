@@ -13,5 +13,6 @@
     timeout 1s
     numMaxRetries 4
     IPv4 54.220.101.24
+    flags small tall
   }
 }

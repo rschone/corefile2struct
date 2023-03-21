@@ -2,6 +2,7 @@ package myplugin
 
 import (
 	"context"
+
 	"github.com/coredns/coredns/plugin"
 	"github.com/miekg/dns"
 )
