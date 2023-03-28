@@ -10,15 +10,7 @@ import (
 	"time"
 )
 
-const (
-	cfTag      = "cf"
-	defaultTag = "default"
-)
-
-var (
-	fieldNotFound = errors.New("field not found")
-	zeroValue     = reflect.Value{}
-)
+var zeroValue = reflect.Value{}
 
 func isPointerToStruct(ps interface{}) bool {
 	t := reflect.TypeOf(ps)
@@ -28,6 +20,23 @@ func isPointerToStruct(ps interface{}) bool {
 
 	s := t.Elem()
 	return s != nil && s.Kind() == reflect.Struct
+}
+
+func assignToField(structVal reflect.Value, fieldName string, data interface{}) error {
+	field := structVal.FieldByName(fieldName)
+	if field == zeroValue {
+		return fmt.Errorf("field '%s' not found", fieldName)
+	}
+	return assignTo(field, data)
+}
+
+func assignTo(target reflect.Value, data interface{}) error {
+	if err := checkIfAssignable(target, data); err != nil {
+		return err
+	}
+	dataVal := reflect.ValueOf(data)
+	target.Set(dataVal)
+	return nil
 }
 
 func checkIfAssignable(target reflect.Value, data interface{}) error {
@@ -44,27 +53,10 @@ func checkIfAssignable(target reflect.Value, data interface{}) error {
 	return nil
 }
 
-func assignTo(target reflect.Value, data interface{}) error {
-	err := checkIfAssignable(target, data)
-	if err == nil {
-		dataVal := reflect.ValueOf(data)
-		target.Set(dataVal)
-	}
-	return err
-}
-
-func assignToField(structVal reflect.Value, fieldName string, data interface{}) error {
-	field := structVal.FieldByName(fieldName)
-	if field != zeroValue {
-		return assignTo(field, data)
-	}
-	return fieldNotFound
-}
-
 func findFieldByTag(structVal reflect.Value, name string) reflect.Value {
-	t := structVal.Type()
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
+	structType := structVal.Type()
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
 		if tag, ok := field.Tag.Lookup(cfTag); ok {
 			if ok && tag == name {
 				return structVal.Field(i)
@@ -74,44 +66,45 @@ func findFieldByTag(structVal reflect.Value, name string) reflect.Value {
 	return zeroValue
 }
 
-func assignFromString(value reflect.Value, input string) error {
-	switch value.Kind() {
+func assignFromString(target reflect.Value, input string) error {
+	switch target.Kind() {
 	case reflect.String:
-		value.SetString(input)
+		target.SetString(input)
 	case reflect.Int:
 		fallthrough
 	case reflect.Int64:
-		if value.Type().Name() == "Duration" {
+		if target.Type().Name() == "Duration" {
 			durationValue, err := time.ParseDuration(input)
 			if err != nil {
 				return err
 			}
-			value.SetInt(int64(durationValue))
+			target.SetInt(int64(durationValue))
 		} else {
 			intValue, err := strconv.Atoi(input)
 			if err != nil {
 				return err
 			}
-			value.SetInt(int64(intValue))
+			target.SetInt(int64(intValue))
 		}
 	case reflect.Float64:
 		floatValue, err := strconv.ParseFloat(input, 64)
 		if err != nil {
 			return err
 		}
-		value.SetFloat(floatValue)
+		target.SetFloat(floatValue)
 	case reflect.Bool:
 		boolValue, err := strconv.ParseBool(input)
 		if err != nil {
 			return err
 		}
-		value.SetBool(boolValue)
+		target.SetBool(boolValue)
 	case reflect.Slice:
-		if value.Type().Elem().Kind() == reflect.String {
+		switch target.Type().Elem().Kind() {
+		case reflect.String:
 			stringSlice := strings.Split(input, ",")
-			value.Set(reflect.ValueOf(stringSlice))
-		} else if value.Type().Elem().Kind() == reflect.Int {
-			intSlice := []int{}
+			target.Set(reflect.ValueOf(stringSlice))
+		case reflect.Int:
+			var intSlice []int
 			for _, str := range strings.Split(input, ",") {
 				intValue, err := strconv.Atoi(str)
 				if err != nil {
@@ -119,14 +112,19 @@ func assignFromString(value reflect.Value, input string) error {
 				}
 				intSlice = append(intSlice, intValue)
 			}
-			value.Set(reflect.ValueOf(intSlice))
-		} else if value.Type().Elem().Kind() == reflect.Uint8 { // net.IP
+			target.Set(reflect.ValueOf(intSlice))
+		case reflect.Uint8:
 			// TODO: is there any other way how to determine net.IP type?
 			ip := net.ParseIP(input)
-			value.Set(reflect.ValueOf(ip))
+			if ip == nil {
+				return fmt.Errorf("invalid IP: %s", input)
+			}
+			target.Set(reflect.ValueOf(ip))
+		default:
+			return fmt.Errorf("unsupported slice type: %v", target.Type())
 		}
 	default:
-		return fmt.Errorf("unsupported type: %v", value.Type())
+		return fmt.Errorf("unsupported type: %v", target.Type())
 	}
 	return nil
 }

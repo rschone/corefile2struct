@@ -30,4 +30,5 @@ require (
 	google.golang.org/genproto v0.0.0-20221227171554-f9683d7f8bef // indirect
 	google.golang.org/grpc v1.52.3 // indirect
 	google.golang.org/protobuf v1.28.1 // indirect
+	k8s.io/utils v0.0.0-20230313181309-38a27ef9d749 // indirect
 )
