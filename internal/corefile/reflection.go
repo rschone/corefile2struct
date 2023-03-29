@@ -1,4 +1,4 @@
-package config
+package corefile
 
 import (
 	"errors"
@@ -114,7 +114,6 @@ func assignFromString(target reflect.Value, input string) error {
 			}
 			target.Set(reflect.ValueOf(intSlice))
 		case reflect.Uint8:
-			// TODO: is there any other way how to determine net.IP type?
 			ip := net.ParseIP(input)
 			if ip == nil {
 				return fmt.Errorf("invalid IP: %s", input)

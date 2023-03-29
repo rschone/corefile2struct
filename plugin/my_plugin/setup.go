@@ -2,9 +2,9 @@ package myplugin
 
 import (
 	"fmt"
+	"github.com/rschone/corefile2struct/internal/corefile"
 
 	"github.com/coredns/caddy"
-	cfg "github.com/rschone/corefile2struct/internal/config"
 )
 
 const pluginName = "my_plugin"
@@ -17,10 +17,8 @@ func init() {
 }
 
 func setup(c *caddy.Controller) error {
-	parser := cfg.NewParser(c)
-
 	var myCfg MyPluginCfg
-	if err := parser.Parse(&myCfg); err != nil {
+	if err := corefile.Parse(c, &myCfg); err != nil {
 		return err
 	}
 

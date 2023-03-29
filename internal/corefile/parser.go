@@ -1,13 +1,12 @@
-package config
+package corefile
 
 import (
 	"errors"
 	"fmt"
-	"k8s.io/utils/strings/slices"
 	"reflect"
 	"strings"
 
-	"github.com/coredns/caddy"
+	"k8s.io/utils/strings/slices"
 )
 
 const (
@@ -17,20 +16,34 @@ const (
 	checkTag            = "check"
 )
 
+// Checker supports custom validations.
+type Checker interface {
+	Check() error
+}
+
+// Initializer supports custom initialization.
+type Initializer interface {
+	Init() error
+}
+
+// Lexer provides tokens for parsing.
 type Lexer interface {
 	Next() bool
 	Val() string
 	RemainingArgs() []string
 }
-type Parser struct {
+
+type parser struct {
 	lexer Lexer
 }
 
-func NewParser(c *caddy.Controller) Parser {
-	return Parser{lexer: c}
+// Parse parses the input provided by lexer and fills the configuration into provided pointer to a custom structure.
+func Parse(lexer Lexer, v any) error {
+	p := parser{lexer: lexer}
+	return p.parse(v)
 }
 
-func (p *Parser) Parse(s any) error {
+func (p *parser) parse(s any) error {
 	if !isPointerToStruct(s) {
 		return errors.New("invalid argument: pointer to a structure expected")
 	}
@@ -54,7 +67,7 @@ func (p *Parser) Parse(s any) error {
 	return nil
 }
 
-func (p *Parser) parsePluginHeader(structVal reflect.Value) error {
+func (p *parser) parsePluginHeader(structVal reflect.Value) error {
 	pluginName := p.lexer.Val()
 	pluginArgs := p.lexer.RemainingArgs()
 	if len(pluginArgs) > 0 {
@@ -65,7 +78,7 @@ func (p *Parser) parsePluginHeader(structVal reflect.Value) error {
 	return nil
 }
 
-func (p *Parser) parseStructure(structVal reflect.Value) error {
+func (p *parser) parseStructure(structVal reflect.Value) error {
 	log("Parsing a structure..")
 	if err := p.applyDefaults(structVal); err != nil {
 		return err
@@ -116,7 +129,7 @@ func (p *Parser) parseStructure(structVal reflect.Value) error {
 	return nil
 }
 
-func (p *Parser) applyDefaults(structVal reflect.Value) error {
+func (p *parser) applyDefaults(structVal reflect.Value) error {
 	log("Apply defaults..")
 	structType := structVal.Type()
 	for i := 0; i < structVal.NumField(); i++ {
@@ -132,7 +145,7 @@ func (p *Parser) applyDefaults(structVal reflect.Value) error {
 	return executeCustomInit(structVal)
 }
 
-func (p *Parser) validateStructure(structVal reflect.Value) error {
+func (p *parser) validateStructure(structVal reflect.Value) error {
 	log("Validate structure ", structVal)
 	structType := structVal.Type()
 	for i := 0; i < structType.NumField(); i++ {
@@ -166,7 +179,7 @@ func (p *Parser) validateStructure(structVal reflect.Value) error {
 }
 
 func executeCustomInit(structVal reflect.Value) error {
-	if itf, ok := structVal.Addr().Interface().(Initiable); ok && itf != nil {
+	if itf, ok := structVal.Addr().Interface().(Initializer); ok && itf != nil {
 		if err := itf.Init(); err != nil {
 			return err
 		}
@@ -174,24 +187,16 @@ func executeCustomInit(structVal reflect.Value) error {
 	return nil
 }
 
-type Checkable interface {
-	Check() error
-}
-
-type Initiable interface {
-	Init() error
-}
-
 func executeCustomChecks(structVal reflect.Value) error {
 	// pointer receiver
-	if itf, ok := structVal.Addr().Interface().(Checkable); ok && itf != nil {
+	if itf, ok := structVal.Addr().Interface().(Checker); ok && itf != nil {
 		if err := itf.Check(); err != nil {
 			return err
 		}
 	}
 
 	// value receiver
-	if itf, ok := structVal.Interface().(Checkable); ok && itf != nil {
+	if itf, ok := structVal.Interface().(Checker); ok && itf != nil {
 		if err := itf.Check(); err != nil {
 			return err
 		}
@@ -209,7 +214,7 @@ func checkNonEmpty(fieldName string, v reflect.Value) error {
 }
 
 func log(a ...any) {
-	fmt.Println(a)
+	fmt.Println(a...)
 }
 
 // custom_errors, dns_alias -> nelze (seznamy stejnych properties)

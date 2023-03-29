@@ -23,13 +23,14 @@ type MyPluginCfg struct {
 
 func (c *MyPluginCfg) Init() error {
 	c.Str = "ahoj"
-	fmt.Println("cau")
+	fmt.Println("Custom init")
 	return nil
 }
 
 func (c MyPluginCfg) Check() error {
+	fmt.Println("Custom check")
 	if c.Str != "moje" {
-		return errors.New("fuck")
+		return errors.New("it shall be my")
 	}
 	return nil
 }
