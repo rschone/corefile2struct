@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-var zeroValue = reflect.Value{}
+var (
+	errNotSettable  = errors.New("target is not settable")
+	errTypeMishmash = errors.New("target is not assignable due the type mishmash")
+)
 
 func isPointerToStruct(ps interface{}) bool {
 	t := reflect.TypeOf(ps)
@@ -24,7 +27,7 @@ func isPointerToStruct(ps interface{}) bool {
 
 func assignToField(structVal reflect.Value, fieldName string, data interface{}) error {
 	field := structVal.FieldByName(fieldName)
-	if field == zeroValue {
+	if !field.IsValid() {
 		return fmt.Errorf("field '%s' not found", fieldName)
 	}
 	return assignTo(field, data)
@@ -41,13 +44,13 @@ func assignTo(target reflect.Value, data interface{}) error {
 
 func checkIfAssignable(target reflect.Value, data interface{}) error {
 	if !target.CanSet() {
-		return errors.New("target is not settable")
+		return errNotSettable
 	}
 
 	dataType := reflect.TypeOf(data)
 	valueType := target.Type()
 	if !dataType.AssignableTo(valueType) {
-		return errors.New("target is not assignable due the type mishmash")
+		return errTypeMishmash
 	}
 
 	return nil
@@ -63,7 +66,7 @@ func findFieldByTag(structVal reflect.Value, name string) reflect.Value {
 			}
 		}
 	}
-	return zeroValue
+	return reflect.Value{}
 }
 
 func assignFromString(target reflect.Value, input string) error {
@@ -71,6 +74,12 @@ func assignFromString(target reflect.Value, input string) error {
 	case reflect.String:
 		target.SetString(input)
 	case reflect.Int:
+		fallthrough
+	case reflect.Int8:
+		fallthrough
+	case reflect.Int16:
+		fallthrough
+	case reflect.Int32:
 		fallthrough
 	case reflect.Int64:
 		if target.Type().Name() == "Duration" {
@@ -86,6 +95,12 @@ func assignFromString(target reflect.Value, input string) error {
 			}
 			target.SetInt(int64(intValue))
 		}
+	case reflect.Float32:
+		floatValue, err := strconv.ParseFloat(input, 32)
+		if err != nil {
+			return err
+		}
+		target.SetFloat(floatValue)
 	case reflect.Float64:
 		floatValue, err := strconv.ParseFloat(input, 64)
 		if err != nil {

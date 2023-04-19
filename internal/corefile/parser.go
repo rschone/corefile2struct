@@ -1,12 +1,10 @@
 package corefile
 
 import (
-	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 
-	"k8s.io/utils/strings/slices"
+	"github.com/coredns/caddy"
 )
 
 const (
@@ -16,205 +14,138 @@ const (
 	checkTag            = "check"
 )
 
-// Checker supports custom validations.
-type Checker interface {
-	Check() error
-}
-
-// Initializer supports custom initialization.
+// Initializer is implemented by a structure when custom structure initialization is required.
 type Initializer interface {
 	Init() error
 }
 
-// Lexer provides tokens for parsing.
-type Lexer interface {
-	Next() bool
-	Val() string
-	RemainingArgs() []string
-}
-
 type parser struct {
-	lexer Lexer
+	lexer     *caddy.Controller
+	log       logger
+	validator validator
 }
 
-// Parse parses the input provided by lexer and fills the configuration into provided pointer to a custom structure.
-func Parse(lexer Lexer, v any) error {
-	p := parser{lexer: lexer}
+// Parse parses the input provided by caddy and fills the configuration into provided pointer to a custom structure.
+func Parse(c *caddy.Controller, v any) error {
+	p := parser{lexer: c, log: c, validator: validator{log: c, checkers: defaultChecks}}
 	return p.parse(v)
 }
 
 func (p *parser) parse(s any) error {
 	if !isPointerToStruct(s) {
-		return errors.New("invalid argument: pointer to a structure expected")
+		return p.log.Err("invalid argument: pointer to a structure expected")
 	}
 	if !p.lexer.Next() {
-		return errors.New("plugin name expected")
+		return p.log.Err("plugin name expected")
 	}
 
+	pluginName := p.lexer.Val()
 	structVal := reflect.ValueOf(s).Elem()
 
-	if err := p.parsePluginHeader(structVal); err != nil {
+	if err := p.parsePluginHeader(structVal, pluginName); err != nil {
 		return err
 	}
 
-	// if the plugin configuration body is present
-	if p.lexer.Next() {
-		if p.lexer.Val() != "{" {
-			return errors.New("'{' expected")
-		}
-		return p.parseStructure(structVal)
-	}
-	return nil
-}
-
-func (p *parser) parsePluginHeader(structVal reflect.Value) error {
-	pluginName := p.lexer.Val()
-	pluginArgs := p.lexer.RemainingArgs()
-	if len(pluginArgs) > 0 {
-		if err := assignToField(structVal, pluginArgsFieldName, pluginArgs); err != nil {
-			return fmt.Errorf("cannot store plugin '%s' arguments into field '%s': %w", pluginName, pluginArgsFieldName, err)
-		}
-	}
-	return nil
-}
-
-func (p *parser) parseStructure(structVal reflect.Value) error {
-	log("Parsing a structure..")
 	if err := p.applyDefaults(structVal); err != nil {
 		return err
 	}
 
-	// current symbol in lexer.Val() is "{"
+	if p.lexer.Next() {
+		if p.lexer.Val() != "{" {
+			return p.log.Err("'{' expected")
+		}
+		return p.parseStructure(structVal, pluginName)
+	}
+
+	return p.applyDefaults(structVal)
+}
+
+func (p *parser) parsePluginHeader(structVal reflect.Value, pluginName string) error {
+	pluginArgs := p.lexer.RemainingArgs()
+	if len(pluginArgs) > 0 {
+		if err := assignToField(structVal, pluginArgsFieldName, pluginArgs); err != nil {
+			return p.log.Errf("cannot store plugin '%s' arguments into field '%s': %v", pluginName, pluginArgsFieldName, err)
+		}
+	}
+	return nil
+}
+
+func (p *parser) parseStructure(structVal reflect.Value, structName string) error {
 	for p.lexer.Next() {
 		if p.lexer.Val() == "}" {
-			log("End up the structure!")
-			return p.validateStructure(structVal)
+			return p.validator.validateStructure(structVal)
 		}
 
 		property := p.lexer.Val()
 		propValues := p.lexer.RemainingArgs()
+
 		if len(propValues) == 0 {
-			if p.lexer.Next() && p.lexer.Val() == "{" {
-				log("structure:", property)
-				field := findFieldByTag(structVal, property)
-				if field == zeroValue {
-					return fmt.Errorf("structure '%s' not found", property)
+			field := findFieldByTag(structVal, property)
+			if !field.IsValid() {
+				return p.log.Errf("property '%s' in structure '%s' not found", property, structName)
+			}
+
+			if field.Type().Kind() == reflect.Pointer {
+				if field.IsNil() {
+					newMem := reflect.New(field.Type().Elem())
+					field.Set(newMem)
 				}
-				if field.Type().Kind() == reflect.Pointer {
-					if field.IsNil() {
-						newMem := reflect.New(field.Type().Elem())
-						field.Set(newMem)
-					}
-					field = field.Elem()
-				}
-				if err := p.parseStructure(field); err != nil {
+				field = field.Elem()
+				if err := p.applyDefaults(field); err != nil {
 					return err
 				}
-			} else {
-				return fmt.Errorf("property '%s' has no value", property)
 			}
+			if field.Type().Kind() == reflect.Struct {
+				if !p.lexer.Next() || p.lexer.Val() != "{" {
+					return p.log.Errf("structure opening character '{' expected, got '%s'", p.lexer.Val())
+				}
+				if err := p.parseStructure(field, property); err != nil {
+					return err
+				}
+			}
+			// or it is a field without value that keeps its default value that has been set by applying defaults
+			// or zero value if a default value had not been present
 		} else {
 			field := findFieldByTag(structVal, property)
-			if field == zeroValue {
-				return errors.New("field not found: " + property)
+			if !field.IsValid() {
+				return p.log.Err("field not found: " + property)
 			}
 
 			value := strings.Join(propValues, ",")
 			if err := assignFromString(field, value); err != nil {
-				return err
+				return p.log.Errf("assigning property value failed: %v", err)
 			}
-			log("prop:", property, "=", propValues)
 		}
 	}
-	return nil
+
+	return p.log.Err("'}' expected")
 }
 
 func (p *parser) applyDefaults(structVal reflect.Value) error {
-	log("Apply defaults..")
 	structType := structVal.Type()
 	for i := 0; i < structVal.NumField(); i++ {
 		fieldType := structType.Field(i)
-		value, ok := fieldType.Tag.Lookup(defaultTag)
-		if ok {
-			fieldValue := structVal.Field(i)
-			if err := assignFromString(fieldValue, value); err != nil {
+		field := structVal.Field(i)
+		if field.Kind() == reflect.Struct {
+			if err := p.applyDefaults(field); err != nil {
 				return err
 			}
-		}
-	}
-	return executeCustomInit(structVal)
-}
-
-func (p *parser) validateStructure(structVal reflect.Value) error {
-	log("Validate structure ", structVal)
-	structType := structVal.Type()
-	for i := 0; i < structType.NumField(); i++ {
-		field := structType.Field(i)
-		tag, ok := field.Tag.Lookup(checkTag)
-		if ok {
-			fieldVal := structVal.Field(i)
-			for _, check := range strings.Split(tag, ",") {
-				check = strings.Trim(check, " ")
-				switch {
-				case strings.HasPrefix(check, "nonempty"):
-					if err := checkNonEmpty(field.Name, fieldVal); err != nil {
-						return err
-					}
-				case strings.HasPrefix(check, "oneof"):
-					start := strings.Index(check, "(")
-					end := strings.Index(check, ")")
-					content := check[start+1 : end]
-					if len(content) > 0 {
-						allowedVals := strings.Split(content, "|")
-						if !slices.Contains(allowedVals, fieldVal.String()) {
-							return fmt.Errorf("value '%s' is not in allowed values %v", fieldVal.String(), allowedVals)
-						}
-					}
+		} else {
+			if defaultValue, ok := fieldType.Tag.Lookup(defaultTag); ok {
+				if err := assignFromString(field, defaultValue); err != nil {
+					return p.log.Errf("apply defaults to property: %v", err)
 				}
 			}
 		}
 	}
-
-	return executeCustomChecks(structVal)
+	return p.executeCustomInit(structVal)
 }
 
-func executeCustomInit(structVal reflect.Value) error {
+func (p *parser) executeCustomInit(structVal reflect.Value) error {
 	if itf, ok := structVal.Addr().Interface().(Initializer); ok && itf != nil {
 		if err := itf.Init(); err != nil {
-			return err
+			return p.log.Errf("custom init failed: %v", err)
 		}
 	}
 	return nil
 }
-
-func executeCustomChecks(structVal reflect.Value) error {
-	// pointer receiver
-	if itf, ok := structVal.Addr().Interface().(Checker); ok && itf != nil {
-		if err := itf.Check(); err != nil {
-			return err
-		}
-	}
-
-	// value receiver
-	if itf, ok := structVal.Interface().(Checker); ok && itf != nil {
-		if err := itf.Check(); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func checkNonEmpty(fieldName string, v reflect.Value) error {
-	zero := reflect.Zero(v.Type()).Interface()
-	if reflect.DeepEqual(v.Interface(), zero) {
-		return fmt.Errorf("non empty check failed for field '%s'", fieldName)
-	}
-	return nil
-}
-
-func log(a ...any) {
-	fmt.Println(a...)
-}
-
-// custom_errors, dns_alias -> nelze (seznamy stejnych properties)

@@ -16,7 +16,7 @@ type MyPluginCfg struct {
 	IPv4          net.IP        `cf:"IPv4" default:"127.0.0.1"`
 	Flags         []string      `cf:"flags"`
 	Nums2         []int         `cf:"nums"`
-	Str           string        `cf:"str" check:"oneof(moje|tvoje|jeho)"`
+	Str           string        `cf:"str" check:"oneof(my|your|his)"`
 	Boolean       bool          `cf:"boolean"`
 	small         int           `cf:"small"` // cannot be parsed - has to be exported!
 }
@@ -29,7 +29,7 @@ func (c *MyPluginCfg) Init() error {
 
 func (c MyPluginCfg) Check() error {
 	fmt.Println("Custom check")
-	if c.Str != "moje" {
+	if c.Str != "my" {
 		return errors.New("it shall be my")
 	}
 	return nil
