@@ -2,7 +2,7 @@ package myplugin
 
 import (
 	"fmt"
-	"github.com/rschone/corefile2struct/internal/corefile"
+	"github.com/rschone/corefile2struct/pkg/corefile"
 
 	"github.com/coredns/caddy"
 )
